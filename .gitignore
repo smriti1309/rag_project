@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+.vscode/
+.idea/
+
+data/uploads/*
+!data/uploads/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+# Generated RAG artifacts
+data/chunks/
+data/embeddings/
+data/bm25/
+temp/

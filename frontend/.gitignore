@@ -1,0 +1,68 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# ==========================
+# Python
+# ==========================
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# ==========================
+# Environment Variables
+# ==========================
+.env
+.env.local
+
+# ==========================
+# Node / Next.js
+# ==========================
+node_modules/
+.next/
+out/
+build/
+
+# ==========================
+# Coverage
+# ==========================
+coverage/
+
+# ==========================
+# Logs
+# ==========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ==========================
+# VS Code
+# ==========================
+.vscode/
+
+# ==========================
+# Temporary Files
+# ==========================
+temp/
+
+# ==========================
+# OS Files
+# ==========================
+.DS_Store
+Thumbs.db
+
+# ==========================
+# TypeScript
+# ==========================
+*.tsbuildinfo
+next-env.d.ts
+
+
+# Generated RAG artifacts
+data/chunks/
+data/embeddings/
+temp/
