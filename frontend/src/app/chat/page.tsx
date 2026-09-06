@@ -111,7 +111,21 @@ export default function ChatPage() {
           messages: [],
         }));
 
-        setSessions(mappedSessions);
+        setSessions((prev) =>
+          mappedSessions.map((fetched) => {
+            const existing = prev.find((s) => s.id === fetched.id);
+            const hasCustomTitle =
+              existing && existing.title && existing.title !== "New Conversation";
+            return {
+              ...fetched,
+              title:
+                fetched.title === "New Conversation" && hasCustomTitle
+                  ? existing.title
+                  : fetched.title,
+              messages: existing ? existing.messages : [],
+            };
+          })
+        );
 
         if (mappedSessions.length > 0) {
           setActiveSessionId((prev) => {
@@ -278,18 +292,40 @@ export default function ChatPage() {
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
+    const currentSession = sessions.find((s) => s.id === currentSessionId);
+    const isFirstMessage = !currentSession || currentSession.messages.length === 0;
+    const generatedTitle = isFirstMessage
+      ? query.length > 25
+        ? query.substring(0, 25) + "..."
+        : query
+      : currentSession?.title || query;
+
+    if (isFirstMessage && currentSessionId) {
+      (async () => {
+        try {
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+          const authHeaders = await getAuthHeaders();
+          await fetch(`${apiUrl}/conversations/${currentSessionId}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              ...authHeaders,
+            },
+            body: JSON.stringify({ title: generatedTitle }),
+          });
+        } catch (err) {
+          console.error("Failed to persist conversation title to backend:", err);
+        }
+      })();
+    }
+
     // Update state immediately with user message for instant feedback
     setSessions((prev) =>
       prev.map((s) => {
         if (s.id === currentSessionId) {
-          const isFirstMessage = s.messages.length === 0;
           return {
             ...s,
-            title: isFirstMessage
-              ? query.length > 25
-                ? query.substring(0, 25) + "..."
-                : query
-              : s.title,
+            title: generatedTitle,
             messages: [...s.messages, userMessage],
           };
         }
