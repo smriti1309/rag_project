@@ -167,9 +167,93 @@ class TestEmbeddingService(unittest.TestCase):
         mock_client.models.embed_content.assert_called_once()
         call_kwargs = mock_client.models.embed_content.call_args[1]
         self.assertEqual(call_kwargs["model"], "gemini-embedding-2")
-        self.assertEqual(call_kwargs["contents"], "This is test chunk text number 1.")
+        self.assertEqual(call_kwargs["contents"], [["This is test chunk text number 1."]])
         self.assertEqual(call_kwargs["config"].output_dimensionality, 768)
         self.assertEqual(call_kwargs["config"].task_type, "RETRIEVAL_DOCUMENT")
+
+    @patch("app.services.embedding_service.genai.Client")
+    def test_generate_embeddings_multiple_batches_and_ordering(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test _generate_embeddings processes texts across multiple batches and preserves exact input order."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        # 5 texts with batch_size=2 -> 3 batch calls (batch 1: 2, batch 2: 2, batch 3: 1)
+        texts = ["t1", "t2", "t3", "t4", "t5"]
+
+        emb1, emb2, emb3, emb4, emb5 = [MagicMock(values=[float(i)] * 768) for i in range(1, 6)]
+
+        mock_client.models.embed_content.side_effect = [
+            MagicMock(embeddings=[emb1, emb2]),
+            MagicMock(embeddings=[emb3, emb4]),
+            MagicMock(embeddings=[emb5]),
+        ]
+
+        custom_settings = Settings(
+            gemini_api_key="test-key",
+            embedding_directory=self.embedding_dir,
+            embedding_batch_size=2,
+        )
+        service = EmbeddingService(settings=custom_settings)
+        res = service._generate_embeddings(texts)
+
+        self.assertEqual(len(res), 5)
+        self.assertEqual(res[0][0], 1.0)
+        self.assertEqual(res[1][0], 2.0)
+        self.assertEqual(res[2][0], 3.0)
+        self.assertEqual(res[3][0], 4.0)
+        self.assertEqual(res[4][0], 5.0)
+        self.assertEqual(mock_client.models.embed_content.call_count, 3)
+
+    @patch("app.services.embedding_service.genai.Client")
+    def test_generate_embeddings_batch_mismatch_raises_error(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test RuntimeError is raised when Gemini returns mismatched embedding count for a batch."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        emb1 = MagicMock(values=[0.1] * 768)
+        # 2 texts sent in batch, but API returns 1 embedding
+        mock_client.models.embed_content.return_value = MagicMock(embeddings=[emb1])
+
+        test_settings = Settings(gemini_api_key="test-key", embedding_directory=self.embedding_dir)
+        service = EmbeddingService(settings=test_settings)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            service._generate_embeddings(["t1", "t2"])
+        self.assertIn("Batch embedding count mismatch", str(ctx.exception))
+
+    @patch("time.sleep")
+    @patch("app.services.embedding_service.genai.Client")
+    def test_generate_embeddings_rate_limit_retry(
+        self, mock_client_cls: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Test 429 RESOURCE_EXHAUSTED errors trigger exponential retry at batch level."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        emb1 = MagicMock(values=[0.1] * 768)
+        emb2 = MagicMock(values=[0.2] * 768)
+
+        # First 2 calls fail with 429, 3rd call succeeds
+        mock_client.models.embed_content.side_effect = [
+            Exception("429 RESOURCE_EXHAUSTED"),
+            Exception("RESOURCE_EXHAUSTED"),
+            MagicMock(embeddings=[emb1, emb2]),
+        ]
+
+        test_settings = Settings(gemini_api_key="test-key", embedding_directory=self.embedding_dir)
+        service = EmbeddingService(settings=test_settings)
+        res = service._generate_embeddings(["text1", "text2"])
+
+        self.assertEqual(len(res), 2)
+        self.assertEqual(res[0], [0.1] * 768)
+        self.assertEqual(res[1], [0.2] * 768)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_any_call(3)
+        mock_sleep.assert_any_call(6)
 
     @patch("app.services.embedding_service.genai.Client")
     def test_embed_document_mismatched_embedding_count(

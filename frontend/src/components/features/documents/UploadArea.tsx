@@ -56,16 +56,13 @@ export function UploadArea({ onUploadSuccess }: UploadAreaProps) {
   const handleRealUpload = async () => {
     if (!selectedFile) return;
     setUploading(true);
-    setProgress(20);
-    setStatusText("Uploading file to Cloudflare R2 & initiating pipeline...");
+    setProgress(0);
+    setStatusText("Initiating upload...");
     setError(null);
 
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-
-      setProgress(50);
-      setStatusText("Processing metadata & executing ingestion pipeline...");
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       const authHeaders = await getAuthHeaders();
@@ -83,28 +80,74 @@ export function UploadArea({ onUploadSuccess }: UploadAreaProps) {
         throw new Error(errData.detail || `Upload failed with status ${res.status}`);
       }
 
-      setProgress(90);
-      setStatusText("Finalizing document indexing...");
-      const data = await res.json();
+      if (!res.body) {
+        throw new Error("No response body received from server");
+      }
 
-      const newDoc = {
-        id: data.document_id,
-        name: data.original_filename,
-        originalFilename: data.original_filename,
-        size: data.size,
-        uploadDate: new Date(data.uploaded_at).toISOString().replace("T", " ").substring(0, 19),
-        chunkCount: data.chunk_count || 0,
-        status: (data.status as any) || "indexed",
-        fileType: data.file_type || "pdf",
-      };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let completedData: any = null;
 
-      setProgress(100);
-      onUploadSuccess(newDoc);
-      setSelectedFile(null);
-      setProgress(0);
-      setStatusText("");
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const event = JSON.parse(trimmed);
+            if (event.stage === "failed") {
+              throw new Error(event.error || "Ingestion pipeline failed.");
+            }
+
+            if (typeof event.progress === "number") {
+              setProgress(event.progress);
+            }
+            if (event.message) {
+              setStatusText(event.message);
+            }
+
+            if (event.stage === "completed" && event.data) {
+              completedData = event.data;
+            }
+          } catch (parseErr: any) {
+            if (parseErr instanceof Error && parseErr.message !== line) {
+              throw parseErr;
+            }
+          }
+        }
+      }
+
+      if (completedData) {
+        const newDoc = {
+          id: completedData.document_id,
+          name: completedData.original_filename,
+          originalFilename: completedData.original_filename,
+          size: completedData.size,
+          uploadDate: new Date(completedData.uploaded_at).toISOString().replace("T", " ").substring(0, 19),
+          chunkCount: completedData.chunk_count || 0,
+          status: (completedData.status as any) || "indexed",
+          fileType: completedData.file_type || "pdf",
+        };
+
+        onUploadSuccess(newDoc);
+        setSelectedFile(null);
+        setProgress(0);
+        setStatusText("");
+      } else {
+        throw new Error("Ingestion stream ended without completing.");
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to upload document to backend.");
+      setProgress(0);
+      setStatusText("");
     } finally {
       setUploading(false);
     }

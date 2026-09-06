@@ -5,7 +5,7 @@ import Link from "next/link";
 import { StatsGrid } from "@/components/features/dashboard/StatsGrid";
 import { SystemHealthPanel } from "@/components/features/dashboard/SystemHealthPanel";
 import { useAuth } from "@/components/providers/AuthProvider";
-import { DocumentItem } from "@/types";
+import { DashboardStats, DocumentItem, SystemHealth } from "@/types";
 import {
   UploadCloud,
   MessageSquare,
@@ -21,12 +21,17 @@ import { getAuthHeaders } from "@/lib/supabase/client";
 export default function DashboardPage() {
   const { user } = useAuth();
   const [recentDocs, setRecentDocs] = useState<DocumentItem[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [loadingStats, setLoadingStats] = useState<boolean>(true);
 
   useEffect(() => {
-    const fetchDocs = async () => {
+    const fetchDashboardData = async () => {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const authHeaders = await getAuthHeaders();
+
+      // 1. Fetch Documents for Recent Documents section
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-        const authHeaders = await getAuthHeaders();
         const res = await fetch(`${apiUrl}/documents`, {
           headers: authHeaders,
         });
@@ -46,8 +51,37 @@ export default function DashboardPage() {
       } catch (err) {
         console.error("Failed to fetch recent documents:", err);
       }
+
+      // 2. Fetch Dashboard Statistics and Health
+      try {
+        setLoadingStats(true);
+        const statsRes = await fetch(`${apiUrl}/dashboard/stats`, {
+          headers: authHeaders,
+        });
+        if (statsRes.ok) {
+          const sData = await statsRes.json();
+          setStats({
+            documentsIndexed: sData.documents_indexed,
+            totalChunks: sData.total_chunks,
+            totalEmbeddings: sData.total_embeddings,
+            vectorDbStatus: sData.qdrant_status as "Connected" | "Disconnected",
+            lastUploadedTime: sData.last_uploaded_time,
+          });
+          setHealth({
+            backendStatus: sData.backend_status,
+            vectorDbStatus: `${sData.qdrant_status} (${sData.qdrant_collection})`,
+            embeddingModel: sData.embedding_model,
+            lastUploadedTime: sData.last_uploaded_time,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch dashboard stats:", err);
+      } finally {
+        setLoadingStats(false);
+      }
     };
-    fetchDocs();
+
+    fetchDashboardData();
   }, []);
 
   return (
@@ -98,12 +132,12 @@ export default function DashboardPage() {
             Updated in real-time
           </span>
         </div>
-        <StatsGrid />
+        <StatsGrid stats={stats} loading={loadingStats} />
       </section>
 
       {/* System Health Panel */}
       <section className="space-y-3">
-        <SystemHealthPanel />
+        <SystemHealthPanel health={health} loading={loadingStats} />
       </section>
 
       {/* Recent Knowledge Base Activity & AI Chat */}

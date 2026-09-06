@@ -23,6 +23,7 @@ class DocumentRepository:
         self.client: Optional[Client] = self._init_supabase_client()
         # In-memory dev fallback store if Supabase database is unconfigured locally
         self._memory_store: dict[str, dict[str, Any]] = {}
+        self._chunks_memory_store: list[dict[str, Any]] = []
 
     def _init_supabase_client(self) -> Optional[Client]:
         """Initialize official supabase-py Client using application settings.
@@ -194,5 +195,148 @@ class DocumentRepository:
         # Fallback to memory store
         if document_id in self._memory_store and self._memory_store[document_id].get("user_id") == user_id:
             del self._memory_store[document_id]
+            self._chunks_memory_store = [
+                c for c in self._chunks_memory_store if c.get("document_id") != document_id
+            ]
             return True
         return False
+
+    def insert_document_chunks(self, chunks_data: list[dict[str, Any]]) -> bool:
+        """Batch upsert document chunk records into Supabase PostgreSQL document_chunks table.
+
+        Args:
+            chunks_data: List of chunk metadata dictionaries.
+
+        Returns:
+            bool: True if inserted/upserted successfully.
+        """
+        if not chunks_data:
+            return True
+
+        if self.client:
+            try:
+                self.client.table("document_chunks").upsert(
+                    chunks_data, on_conflict="document_id,chunk_id"
+                ).execute()
+                return True
+            except Exception as e:
+                logger.error("Failed to upsert document chunks into Supabase DB: %s", e)
+
+        # Fallback to memory store (prevent duplicate (document_id, chunk_id) keys)
+        new_keys = {(c["document_id"], c["chunk_id"]) for c in chunks_data}
+        self._chunks_memory_store = [
+            c
+            for c in self._chunks_memory_store
+            if (c.get("document_id"), c.get("chunk_id")) not in new_keys
+        ]
+        self._chunks_memory_store.extend(chunks_data)
+        return True
+
+    def _get_indexed_doc_ids(self, user_id: str) -> set[str]:
+        """Fetch set of document IDs owned by user_id that are in status='indexed'."""
+        if self.client:
+            try:
+                res = (
+                    self.client.table("documents")
+                    .select("id")
+                    .eq("user_id", user_id)
+                    .eq("status", "indexed")
+                    .execute()
+                )
+                if res.data is not None:
+                    return {doc["id"] for doc in res.data}
+            except Exception as e:
+                logger.error("Failed to fetch indexed document IDs: %s", e)
+
+        # Fallback to memory store
+        return {
+            doc_id
+            for doc_id, doc in self._memory_store.items()
+            if doc.get("user_id") == user_id and doc.get("status") == "indexed"
+        }
+
+    def get_user_chunks(
+        self, user_id: str, document_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Retrieve document chunks for specified user_id belonging ONLY to documents with status='indexed'.
+
+        Args:
+            user_id: Authenticated user ID.
+            document_id: Optional document UUID filter.
+
+        Returns:
+            list[dict[str, Any]]: List of matching document chunk dictionaries from indexed documents.
+        """
+        indexed_doc_ids = self._get_indexed_doc_ids(user_id)
+        if not indexed_doc_ids:
+            return []
+
+        if document_id and document_id not in indexed_doc_ids:
+            return []
+
+        # Fetch chunks belonging to indexed document IDs
+        if self.client:
+            try:
+                target_doc_ids = [document_id] if document_id else list(indexed_doc_ids)
+                query = (
+                    self.client.table("document_chunks")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .in_("document_id", target_doc_ids)
+                )
+                res = query.order("chunk_id", desc=False).execute()
+                if res.data is not None:
+                    return res.data
+            except Exception as e:
+                logger.error("Failed to fetch user chunks from Supabase DB: %s", e)
+
+        # Fallback to memory store
+        target_ids = {document_id} if document_id else indexed_doc_ids
+        results = [
+            c
+            for c in self._chunks_memory_store
+            if c.get("user_id") == user_id and c.get("document_id") in target_ids
+        ]
+        return results
+
+    def get_user_watermark(self, user_id: str) -> tuple[Optional[str], int]:
+        """Fetch the latest indexed document timestamp and total indexed doc count for watermark checks.
+
+        Args:
+            user_id: Authenticated user ID.
+
+        Returns:
+            tuple[Optional[str], int]: (latest_updated_at_iso, indexed_document_count)
+        """
+        if self.client:
+            try:
+                res = (
+                    self.client.table("documents")
+                    .select("updated_at")
+                    .eq("user_id", user_id)
+                    .eq("status", "indexed")
+                    .order("updated_at", desc=True)
+                    .execute()
+                )
+                if res.data is not None:
+                    count = len(res.data)
+                    latest_ts = res.data[0].get("updated_at") if count > 0 else None
+                    return (latest_ts, count)
+            except Exception as e:
+                logger.error("Failed to fetch user watermark from Supabase DB: %s", e)
+
+        # Fallback to memory store
+        user_indexed_docs = [
+            doc
+            for doc in self._memory_store.values()
+            if doc.get("user_id") == user_id and doc.get("status") == "indexed"
+        ]
+        count = len(user_indexed_docs)
+        if count == 0:
+            return (None, 0)
+
+        latest_ts = max(
+            doc.get("updated_at", "") for doc in user_indexed_docs
+        )
+        return (latest_ts, count)
+

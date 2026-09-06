@@ -8,10 +8,11 @@ import unittest
 
 from app.core.config import Settings
 from app.services.bm25_service import BM25Service
+from app.services.document_repository import DocumentRepository
 
 
 class TestBM25Service(unittest.TestCase):
-    """Test suite for BM25Service indexing, searching, persistence, and isolation."""
+    """Test suite for BM25Service indexing, searching, persistence, caching, and isolation."""
 
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp())
@@ -24,13 +25,43 @@ class TestBM25Service(unittest.TestCase):
             chunk_directory=self.chunk_dir,
             bm25_directory=self.bm25_dir,
         )
-        self.service = BM25Service(settings=self.settings)
+        self.doc_repo = DocumentRepository(settings=self.settings)
+        self.service = BM25Service(document_repository=self.doc_repo, settings=self.settings)
 
         self.user_a = "user-alice-111"
         self.user_b = "user-bob-222"
         self.doc_1 = "doc-alpha-123"
         self.doc_2 = "doc-beta-456"
         self.doc_b_1 = "doc-bob-789"
+
+        # Register documents in doc_repo for watermark tracking
+        self.doc_repo.insert_document(
+            {
+                "id": self.doc_1,
+                "user_id": self.user_a,
+                "filename": "python_guide.pdf",
+                "status": "indexed",
+                "updated_at": "2026-09-06T10:00:00+00:00",
+            }
+        )
+        self.doc_repo.insert_document(
+            {
+                "id": self.doc_2,
+                "user_id": self.user_a,
+                "filename": "database_guide.pdf",
+                "status": "indexed",
+                "updated_at": "2026-09-06T11:00:00+00:00",
+            }
+        )
+        self.doc_repo.insert_document(
+            {
+                "id": self.doc_b_1,
+                "user_id": self.user_b,
+                "filename": "secret_bob.pdf",
+                "status": "indexed",
+                "updated_at": "2026-09-06T12:00:00+00:00",
+            }
+        )
 
         # Create mock chunk document 1 for User A
         self.chunk_doc_1 = {
@@ -94,12 +125,12 @@ class TestBM25Service(unittest.TestCase):
         self.chunk_file_b.write_text(json.dumps(self.chunk_doc_b), encoding="utf-8")
 
     def tearDown(self) -> None:
+        BM25Service._user_caches.clear()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_index_document_and_retrieve_relevant_chunk(self) -> None:
-        """Test indexing a document and retrieving a relevant chunk by keyword."""
-        artifact_path = self.service.index_document(self.chunk_file_1)
-        self.assertTrue(artifact_path.exists())
+        """Test indexing a document into DB and retrieving a relevant chunk by keyword."""
+        self.service.index_document(self.chunk_file_1)
 
         results = self.service.search_chunks(query="FastAPI", user_id=self.user_a)
         self.assertGreater(len(results), 0)
@@ -109,7 +140,7 @@ class TestBM25Service(unittest.TestCase):
         self.assertGreater(results[0]["bm25_score"], 0.0)
 
     def test_exact_keyword_matching(self) -> None:
-        """Test exact keyword search matching."""
+        """Test exact keyword search matching across multiple indexed documents."""
         self.service.index_document(self.chunk_file_1)
         self.service.index_document(self.chunk_file_2)
 
@@ -127,7 +158,7 @@ class TestBM25Service(unittest.TestCase):
         self.assertEqual(len(results), 1)
 
     def test_user_id_isolation_fail_safe(self) -> None:
-        """Test strict fail-safe user_id isolation (never returns chunks for another user)."""
+        """Test strict fail-safe user_id isolation."""
         self.service.index_document(self.chunk_file_1)
         self.service.index_document(self.chunk_file_b)
 
@@ -154,22 +185,44 @@ class TestBM25Service(unittest.TestCase):
         for chunk in results:
             self.assertEqual(chunk["document_id"], self.doc_1)
 
-    def test_persistence_and_auto_recovery(self) -> None:
-        """Test persisted BM25 data works across service instances and auto-rebuilds if missing."""
+    def test_watermark_invalidation_and_multi_instance(self) -> None:
+        """Test that updating document watermark automatically triggers cache rebuild in a new instance."""
         self.service.index_document(self.chunk_file_1)
 
-        # Create a new service instance sharing the same directories
-        new_service = BM25Service(settings=self.settings)
+        # Warm up cache in service instance 1
+        res1 = self.service.search_chunks(query="Python", user_id=self.user_a)
+        self.assertEqual(len(res1), 2)
 
-        # Delete the .bm25.json file to test auto-recovery from chunk JSON
-        bm25_artifact = self.bm25_dir / f"{self.doc_1}.bm25.json"
-        if bm25_artifact.exists():
-            bm25_artifact.unlink()
+        # Service instance 2 (simulating multi-instance backend)
+        service2 = BM25Service(document_repository=self.doc_repo, settings=self.settings)
 
-        # Search using new service -> should auto-rebuild from chunk_file_1 and return results
-        results = new_service.search_chunks(query="programming", user_id=self.user_a)
-        self.assertEqual(len(results), 1)
-        self.assertTrue(bm25_artifact.exists())
+        # Add a 3rd document for user_a and bump updated_at
+        self.doc_repo.insert_document(
+            {
+                "id": "doc-gamma-777",
+                "user_id": self.user_a,
+                "filename": "django_guide.pdf",
+                "status": "indexed",
+                "updated_at": "2026-09-06T15:00:00+00:00",
+            }
+        )
+        self.doc_repo.insert_document_chunks(
+            [
+                {
+                    "document_id": "doc-gamma-777",
+                    "user_id": self.user_a,
+                    "chunk_id": 1,
+                    "page": 1,
+                    "source_file": "django_guide.pdf",
+                    "text": "Django is a high-level Python web framework.",
+                }
+            ]
+        )
+
+        # Service 2 queries for Python -> watermark check sees new doc and rebuilds index including Django
+        res2 = service2.search_chunks(query="Django", user_id=self.user_a)
+        self.assertEqual(len(res2), 1)
+        self.assertEqual(res2[0]["document_id"], "doc-gamma-777")
 
     def test_empty_and_no_match_queries(self) -> None:
         """Test handling of empty queries and queries with zero matches."""

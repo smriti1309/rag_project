@@ -19,14 +19,14 @@ export const mockDashboardStats: DashboardStats = {
   totalChunks: 1245,
   totalEmbeddings: 1245,
   vectorDbStatus: "Connected",
-  lastIndexedTime: "2026-07-30 16:25:33",
+  lastUploadedTime: "2026-07-30 16:25:33",
 };
 
 export const mockSystemHealth: SystemHealth = {
   backendStatus: "Healthy (FastAPI v1.0.0)",
   vectorDbStatus: "Connected (Qdrant v1.7.0)",
   embeddingModel: "gemini-embedding-2 (768-dim)",
-  lastIndexedTime: "2026-07-30 16:25:33",
+  lastUploadedTime: "2026-07-30 16:25:33",
 };
 
 export const mockDocuments: DocumentItem[] = [];

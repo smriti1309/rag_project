@@ -16,14 +16,14 @@ export interface DashboardStats {
   totalChunks: number;
   totalEmbeddings: number;
   vectorDbStatus: "Connected" | "Disconnected";
-  lastIndexedTime: string;
+  lastUploadedTime: string | null;
 }
 
 export interface SystemHealth {
   backendStatus: string;
   vectorDbStatus: string;
   embeddingModel: string;
-  lastIndexedTime: string;
+  lastUploadedTime: string | null;
 }
 
 export interface ChatCitation {

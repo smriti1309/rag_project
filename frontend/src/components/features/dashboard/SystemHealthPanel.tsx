@@ -1,8 +1,21 @@
 import React from "react";
-import { mockSystemHealth } from "@/lib/mock-data";
-import { Server, Database, Cpu, Clock, CheckCircle, Activity } from "lucide-react";
+import { SystemHealth } from "@/types";
+import { Server, Database, Cpu, Clock, CheckCircle, AlertTriangle, Activity } from "lucide-react";
 
-export function SystemHealthPanel() {
+interface SystemHealthPanelProps {
+  health: SystemHealth | null;
+  loading?: boolean;
+}
+
+export function SystemHealthPanel({ health, loading }: SystemHealthPanelProps) {
+  const isHealthy = health?.vectorDbStatus?.includes("Connected");
+  const backendStatus = loading ? "Checking..." : health?.backendStatus || "Healthy";
+  const vectorDbStatus = loading ? "Checking..." : health?.vectorDbStatus || "Disconnected";
+  const embeddingModel = loading ? "Loading..." : health?.embeddingModel || "gemini-embedding-2 (768D)";
+  const lastUploadedTime = loading
+    ? "Loading..."
+    : health?.lastUploadedTime || "No documents uploaded";
+
   return (
     <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm">
       <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
@@ -20,9 +33,15 @@ export function SystemHealthPanel() {
           </div>
         </div>
 
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/50">
-          <CheckCircle className="w-3.5 h-3.5" /> All Services Operational
-        </span>
+        {isHealthy ? (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/50">
+            <CheckCircle className="w-3.5 h-3.5" /> All Services Operational
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50">
+            <AlertTriangle className="w-3.5 h-3.5" /> Service Degraded
+          </span>
+        )}
       </div>
 
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -36,7 +55,7 @@ export function SystemHealthPanel() {
               Backend Status
             </span>
             <span className="block text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-              {mockSystemHealth.backendStatus}
+              {backendStatus}
             </span>
           </div>
         </div>
@@ -51,7 +70,7 @@ export function SystemHealthPanel() {
               Vector Database
             </span>
             <span className="block text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-              {mockSystemHealth.vectorDbStatus}
+              {vectorDbStatus}
             </span>
           </div>
         </div>
@@ -66,22 +85,22 @@ export function SystemHealthPanel() {
               Embedding Model
             </span>
             <span className="block text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-              {mockSystemHealth.embeddingModel}
+              {embeddingModel}
             </span>
           </div>
         </div>
 
-        {/* Last Indexed Time */}
+        {/* Last Uploaded Time */}
         <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800 flex items-center gap-3">
           <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 shrink-0">
             <Clock className="w-4 h-4" />
           </div>
           <div className="min-w-0">
             <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Last Indexed Time
+              Last Uploaded Time
             </span>
             <span className="block text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-              {mockSystemHealth.lastIndexedTime}
+              {lastUploadedTime}
             </span>
           </div>
         </div>

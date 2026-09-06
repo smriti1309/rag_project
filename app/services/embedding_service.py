@@ -94,35 +94,45 @@ class EmbeddingService:
         return [chunk.text for chunk in chunk_doc.chunks]
 
     def _generate_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """Generate 768D vector embeddings for a list of text strings using Gemini API.
+        """Generate 768D vector embeddings for a list of text strings using Gemini API in batches.
 
         Args:
             texts: List of text strings to embed.
 
         Returns:
-            list[list[float]]: Nested list of 768D float embedding vectors.
+            list[list[float]]: Nested list of 768D float embedding vectors in exact input order.
 
         Raises:
             ValueError: If texts list is empty.
-            RuntimeError: If embedding encoding fails.
+            RuntimeError: If embedding encoding fails or batch response count mismatches.
         """
         if not texts:
             raise ValueError("No text found for embedding generation.")
 
+        batch_size = self.settings.embedding_batch_size
+        embeddings: list[list[float]] = []
+
         try:
-            embeddings: list[list[float]] = []
-            for text in texts:
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i : i + batch_size]
                 for attempt in range(1, 6):
                     try:
                         response = self.client.models.embed_content(
                             model=self.settings.embedding_model,
-                            contents=text,
+                            contents=[[text] for text in batch_texts],
                             config=types.EmbedContentConfig(
                                 output_dimensionality=768,
                                 task_type="RETRIEVAL_DOCUMENT",
                             ),
                         )
-                        embeddings.append(response.embeddings[0].values)
+                        if not response or not hasattr(response, "embeddings") or not response.embeddings:
+                            raise ValueError(f"Batch embedding returned no embeddings for batch of size {len(batch_texts)}.")
+                        if len(response.embeddings) != len(batch_texts):
+                            raise ValueError(
+                                f"Batch embedding count mismatch: expected {len(batch_texts)}, got {len(response.embeddings)}"
+                            )
+                        for emb in response.embeddings:
+                            embeddings.append(emb.values)
                         break
                     except Exception as err:
                         if ("429" in str(err) or "RESOURCE_EXHAUSTED" in str(err)) and attempt < 5:

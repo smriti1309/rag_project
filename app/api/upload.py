@@ -4,13 +4,14 @@ from datetime import datetime, timezone
 import logging
 from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from qdrant_client import models
 
 from app.core.auth import get_current_user_id
 from app.core.config import settings
 from app.schemas.upload import UploadResponse
 from app.services.document_repository import DocumentRepository
-from app.services.ingestion_service import ingest_document
+from app.services.ingestion_service import IngestionService
 from app.services.qdrant_service import QdrantService
 from app.services.r2_storage_service import R2StorageService
 
@@ -21,46 +22,24 @@ router = APIRouter(tags=["Upload"])
 
 @router.post(
     "/upload",
-    response_model=UploadResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload a document or image",
 )
 def upload_file(
     file: UploadFile = File(...),
     user_id: str = Depends(get_current_user_id),
-) -> UploadResponse:
+):
     """Upload a PDF, TXT, DOCX, or Image file to Cloudflare R2 and run ingestion pipeline for text documents.
 
     Accepts PDF, TXT, DOCX, PNG, JPG, JPEG, and WEBP files up to 50MB. Uploads to R2
     under user-isolated path {user_id}/{document_id}/{filename} and records metadata in
-    Supabase Database. Runs RAG indexing for PDFs/TXTs.
+    Supabase Database. Runs RAG indexing for PDFs/TXTs. Streams progress events as NDJSON.
     """
-    try:
-        import os
-        print("=== TEMPORARY LOGGING BEFORE QDRANTSERVICE CREATION ===")
-        print("settings.qdrant_url:", settings.qdrant_url)
-        print("settings.qdrant_collection_name:", settings.qdrant_collection_name)
-        print("settings.qdrant_api_key (first 5):", settings.qdrant_api_key[:5] if settings.qdrant_api_key else None)
-        print("current working directory:", os.getcwd())
-        print("os.environ.get('QDRANT_URL'):", os.environ.get("QDRANT_URL"))
-        print("os.environ['QDRANT_API_KEY'] exists?:", "QDRANT_API_KEY" in os.environ)
-
-        return ingest_document(file, user_id)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except OSError as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Storage failure: {e}",
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ingestion failure: {e}",
-        )
+    service = IngestionService()
+    return StreamingResponse(
+        service.ingest_document_stream(file, user_id),
+        media_type="application/x-ndjson",
+    )
 
 
 @router.get(
@@ -172,7 +151,14 @@ def delete_document(
         except Exception:
             pass
 
-    # 4. Delete document metadata row from Supabase Database
+    # 4. Delete document metadata row from Supabase Database (ON DELETE CASCADE purges document_chunks)
     repo.delete_document(user_id, document_id)
+
+    # 5. Invalidate BM25 in-memory cache for user
+    try:
+        from app.services.bm25_service import BM25Service
+        BM25Service().invalidate_user_cache(user_id)
+    except Exception as e:
+        logger.warning("Failed to invalidate BM25 cache for user '%s': %s", user_id, e)
 
     return {"success": True, "message": f"Document '{document_id}' deleted successfully."}

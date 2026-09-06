@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     semantic_similarity_threshold: float = 0.75
     semantic_chunk_min_words: int = 50
     semantic_chunk_max_words: int = 500
+    semantic_candidate_group_target_words: int = 150
     semantic_embedding_concurrency: int = 5
 
     # Embedding configuration

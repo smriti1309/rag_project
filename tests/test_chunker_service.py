@@ -67,6 +67,7 @@ class TestChunkerService(unittest.TestCase):
             semantic_similarity_threshold=0.75,
             semantic_chunk_min_words=5,
             semantic_chunk_max_words=500,
+            semantic_candidate_group_target_words=10,
         )
         service = ChunkerService(
             embedding_service=mock_embedding_service, settings=custom_settings

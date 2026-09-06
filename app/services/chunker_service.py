@@ -88,6 +88,11 @@ class ChunkerService:
             raise ValueError(
                 f"chunk_overlap must be non-negative, got {self.settings.chunk_overlap}"
             )
+        target_words = getattr(self.settings, "semantic_candidate_group_target_words", 150)
+        if target_words <= 0:
+            raise ValueError(
+                f"semantic_candidate_group_target_words must be greater than 0, got {target_words}"
+            )
 
     def _read_document(self, txt_path: Path) -> str:
         """Read and validate the contents of a text file."""
@@ -362,6 +367,69 @@ class ChunkerService:
 
         return output_path
 
+    def _group_candidate_units(
+        self, units: list[ParagraphUnit], full_text: str
+    ) -> list[ParagraphUnit]:
+        """Pre-group consecutive short paragraph units into candidate units targeting target_words.
+
+        Args:
+            units: List of atomic ParagraphUnit objects.
+            full_text: Complete document text.
+
+        Returns:
+            list[ParagraphUnit]: List of candidate ParagraphUnit objects.
+        """
+        if not units:
+            return []
+
+        target_words = getattr(
+            self.settings, "semantic_candidate_group_target_words", 150
+        )
+        max_words = getattr(
+            self.settings, "semantic_chunk_max_words", self.settings.chunk_max_words
+        )
+        target = min(target_words, max_words)
+
+        candidate_units: list[ParagraphUnit] = []
+        current_group: list[ParagraphUnit] = []
+        current_words = 0
+
+        for unit in units:
+            if current_group and (current_words + unit.word_count > target):
+                g_start = current_group[0].start_char
+                g_end = current_group[-1].end_char
+                g_text = full_text[g_start:g_end]
+                candidate_units.append(
+                    ParagraphUnit(
+                        start_char=g_start,
+                        end_char=g_end,
+                        text=g_text,
+                        page=current_group[0].page,
+                        word_count=len(g_text.split()),
+                    )
+                )
+                current_group = []
+                current_words = 0
+
+            current_group.append(unit)
+            current_words += unit.word_count
+
+        if current_group:
+            g_start = current_group[0].start_char
+            g_end = current_group[-1].end_char
+            g_text = full_text[g_start:g_end]
+            candidate_units.append(
+                ParagraphUnit(
+                    start_char=g_start,
+                    end_char=g_end,
+                    text=g_text,
+                    page=current_group[0].page,
+                    word_count=len(g_text.split()),
+                )
+            )
+
+        return candidate_units
+
     def chunk_document(
         self,
         txt_path: Path,
@@ -378,8 +446,9 @@ class ChunkerService:
             split_units = self._split_large_paragraph(p, full_text)
             processed_units.extend(split_units)
 
-        unit_embeddings = self._get_paragraph_embeddings(processed_units)
-        chunks = self._build_semantic_chunks(processed_units, full_text, unit_embeddings)
+        candidate_units = self._group_candidate_units(processed_units, full_text)
+        unit_embeddings = self._get_paragraph_embeddings(candidate_units)
+        chunks = self._build_semantic_chunks(candidate_units, full_text, unit_embeddings)
 
         doc_id = document_id or txt_path.stem
 

@@ -140,6 +140,22 @@ class ChatService:
             )
             effective_conv_id = conv["id"]
 
+        # Fetch previous conversation history BEFORE inserting current user message
+        history: list[dict[str, Any]] = []
+        try:
+            raw_history = self.conversation_repository.list_conversation_messages(
+                user_id, effective_conv_id
+            )
+            if raw_history:
+                history = raw_history[-6:]  # Take latest 6 messages (3 turns)
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch conversation history for user '%s' conv '%s': %s. Continuing with empty history.",
+                user_id,
+                effective_conv_id,
+                e,
+            )
+
         # Persist incoming user query message
         self.conversation_repository.insert_message(
             conversation_id=effective_conv_id,
@@ -152,8 +168,19 @@ class ChatService:
         candidate_k = self.settings.hybrid_candidate_k
         final_top_k = request.top_k if request.top_k != 5 else self.settings.hybrid_top_k
 
-        # Step 1: Generate vector embedding for the query
-        query_vector = self.embedding_service.embed_query(request.query)
+        # Step 0: Perform conversational query rewriting if history exists
+        standalone_query = request.query
+        if history:
+            try:
+                rewritten = self.llm_service.rewrite_query(request.query, history=history)
+                if rewritten and rewritten.strip():
+                    standalone_query = rewritten.strip()
+                    logger.info("Rewrote conversational query into standalone query: '%s'", standalone_query)
+            except Exception as e:
+                logger.warning("Query rewriter encountered error: %s. Falling back to original query.", e)
+
+        # Step 1: Generate vector embedding for the search query
+        query_vector = self.embedding_service.embed_query(standalone_query)
 
         # Step 2: Perform dense vector search in Qdrant (Candidate Top 20)
         dense_results = self.qdrant_service.search_vectors(
@@ -165,7 +192,7 @@ class ChatService:
 
         # Step 3: Perform BM25 lexical search (Candidate Top 20)
         bm25_results = self.bm25_service.search_chunks(
-            query=request.query,
+            query=standalone_query,
             user_id=user_id,
             document_id=request.document_id,
             top_k=candidate_k,
@@ -205,7 +232,9 @@ class ChatService:
             )
 
         # Step 5: Invoke LLMService to generate grounded answer using fused top chunks
-        answer = self.llm_service.generate_answer(request.query, relevant_chunks)
+        answer = self.llm_service.generate_answer(
+            query=request.query, chunks=relevant_chunks, history=history
+        )
 
         # Step 6: Construct source citations preserving original Qdrant cosine score and retrieved chunk text
         sources = [

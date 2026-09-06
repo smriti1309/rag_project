@@ -9,7 +9,7 @@ interface DashboardCardProps {
   trend?: "up" | "down" | "neutral";
   icon: LucideIcon;
   description?: string;
-  color?: "indigo" | "cyan" | "emerald" | "amber";
+  color?: "indigo" | "cyan" | "emerald" | "amber" | "rose";
 }
 
 export function DashboardCard({
@@ -26,6 +26,7 @@ export function DashboardCard({
     cyan: "from-cyan-500 to-cyan-600 text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-950/60 border-cyan-100 dark:border-cyan-900/50",
     emerald: "from-emerald-500 to-emerald-600 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-100 dark:border-emerald-900/50",
     amber: "from-amber-500 to-amber-600 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-100 dark:border-amber-900/50",
+    rose: "from-rose-500 to-rose-600 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 border-rose-100 dark:border-rose-900/50",
   };
 
   return (
